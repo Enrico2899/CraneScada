@@ -9,6 +9,7 @@ Da lanciare dalla root del progetto (deve poter importare `config` e
 `plc_comm`).
 """
 
+import dataclasses
 import statistics
 import sys
 import time
@@ -49,6 +50,7 @@ def main() -> None:
 
     durations_ms = []
     last_cycle_counter = None
+    last_snapshot = None
     try:
         for i in range(n_reads):
             start = time.perf_counter()
@@ -62,6 +64,7 @@ def main() -> None:
             if last_cycle_counter is not None and snapshot.cycle_counter == last_cycle_counter:
                 print(f"  (lettura #{i}: CycleCounter invariato, {snapshot.cycle_counter})")
             last_cycle_counter = snapshot.cycle_counter
+            last_snapshot = snapshot
     finally:
         client.disconnect()
 
@@ -77,6 +80,11 @@ def main() -> None:
     print(f"  max:     {max(durations_ms):.2f} ms")
     if len(durations_ms) > 1:
         print(f"  stdev:   {statistics.stdev(durations_ms):.2f} ms")
+
+    print()
+    print("Ultima lettura (confronta questi valori con quelli attesi/reali in TIA Portal):")
+    for field in dataclasses.fields(last_snapshot):
+        print(f"  {field.name:22s} = {getattr(last_snapshot, field.name)}")
 
 
 if __name__ == "__main__":

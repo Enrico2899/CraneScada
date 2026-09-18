@@ -33,7 +33,15 @@ class PLCClient:
 
     def connect(self) -> None:
         # TODO: gestire retry/backoff se la connessione fallisce al primo colpo
-        self._client.connect(self._ip, self._rack, self._slot)
+        try:
+            self._client.connect(self._ip, self._rack, self._slot)
+        except RuntimeError as exc:
+            # snap7 solleva RuntimeError sia per libreria nativa Snap7
+            # mancante/non trovata sia per errori TCP (host irraggiungibile,
+            # rack/slot sbagliati, ecc.) — il messaggio originale distingue i casi.
+            raise PLCConnectionError(
+                f"Connessione al PLC {self._ip} fallita: {exc}"
+            ) from exc
         if not self._client.get_connected():
             raise PLCConnectionError(f"Impossibile connettersi al PLC {self._ip}")
         logger.info("Connesso al PLC %s (rack=%s, slot=%s)", self._ip, self._rack, self._slot)
@@ -54,7 +62,10 @@ class PLCClient:
         byte necessario per i campi ad alta frequenza (posizione) con una
         chiamata separata e più leggera.
         """
-        buffer = self._client.db_read(self._db_number, 0, self._db_size)
+        try:
+            buffer = self._client.db_read(self._db_number, 0, self._db_size)
+        except RuntimeError as exc:
+            raise PLCConnectionError(f"Lettura del DB {self._db_number} fallita: {exc}") from exc
         snapshot = db_mapping.parse_snapshot(buffer)
         self._update_heartbeat(snapshot.cycle_counter)
         return snapshot

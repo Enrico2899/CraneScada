@@ -4,9 +4,9 @@ Modificare i valori qui sotto con i parametri reali del proprio impianto.
 """
 
 # --- Connessione PLC ---
-PLC_IP = "192.168.0.1"      # TODO: IP reale del PLC (DPC8O4_Cr511 / HX00S01+A301-1023E1)
-PLC_RACK = 0                 # TODO: verificare rack reale
-PLC_SLOT = 1                 # TODO: verificare slot reale (CPU 1515F-2 PN)
+PLC_IP = "172.16.185.10"     # IP reale del PLC (DPC8O4_Cr511 / HX00S01+A301-1023E1)
+PLC_RACK = 0
+PLC_SLOT = 1                 # CPU 1515F-2 PN
 
 # --- DB export (Q3_DB / DB7901) ---
 PLC_DB_NUMBER = 7901

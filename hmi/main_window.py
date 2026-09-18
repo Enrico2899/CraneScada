@@ -11,16 +11,33 @@ Due timer separati (vedi CLAUDE.md, "due loop di polling separati"):
 - loop lento (SLOW_POLL_INTERVAL_S): non fa una lettura propria, si limita
   a rinfrescare le label di stato/step/mission dall'ultimo snapshot già
   letto dal loop veloce.
+
+La finestra possiede anche il ciclo di vita della connessione PLC: un
+campo IP + pulsante "Connetti" permettono di (ri)connettersi senza
+riavviare l'app. L'ultimo IP usato con successo viene salvato in un file
+locale e riproposto al prossimo avvio.
 """
 
+import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QGridLayout, QLabel, QMainWindow, QWidget
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QPushButton,
+    QWidget,
+)
 
 from plc_comm.db_mapping import CraneSnapshot
 from plc_comm.s7_client import PLCClient, PLCConnectionError
 from storage.database import Database
+
+logger = logging.getLogger(__name__)
 
 # Campi discreti su cui fare edge detection nel loop veloce (vedi CLAUDE.md)
 _DISCRETE_EVENT_FIELDS = [
@@ -37,39 +54,73 @@ def _mission_id_or_none(mission_id: int) -> int | None:
     return mission_id if mission_id != 0 else None
 
 
+def _load_last_ip(path: Path, default_ip: str) -> str:
+    try:
+        saved = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return default_ip
+    return saved or default_ip
+
+
+def _save_last_ip(path: Path, ip: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(ip, encoding="utf-8")
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
-        plc_client: PLCClient,
         database: Database,
+        default_plc_ip: str,
+        plc_rack: int,
+        plc_slot: int,
+        plc_db_number: int,
+        plc_db_size: int,
         fast_poll_interval_s: float,
         slow_poll_interval_s: float,
         heartbeat_stale_threshold: int,
+        last_ip_file: Path,
     ):
         super().__init__()
         self.setWindowTitle("Crane HMI/SCADA Logger")
 
-        self._plc_client = plc_client
         self._database = database
+        self._plc_rack = plc_rack
+        self._plc_slot = plc_slot
+        self._plc_db_number = plc_db_number
+        self._plc_db_size = plc_db_size
         self._heartbeat_stale_threshold = heartbeat_stale_threshold
+        self._last_ip_file = last_ip_file
+        self._fast_poll_interval_ms = int(fast_poll_interval_s * 1000)
+        self._slow_poll_interval_ms = int(slow_poll_interval_s * 1000)
 
+        self._plc_client: PLCClient | None = None
         self._last_snapshot: CraneSnapshot | None = None
         self._open_mission_id: int | None = None
         self._mission_interrupted_handled = False
 
-        self._build_ui()
+        self._build_ui(_load_last_ip(last_ip_file, default_plc_ip))
 
         self._fast_timer = QTimer(self)
         self._fast_timer.timeout.connect(self._on_fast_poll)
-        self._fast_timer.start(int(fast_poll_interval_s * 1000))
-
         self._slow_timer = QTimer(self)
         self._slow_timer.timeout.connect(self._on_slow_poll)
-        self._slow_timer.start(int(slow_poll_interval_s * 1000))
 
-    def _build_ui(self) -> None:
+        self._on_connect_clicked()  # prova a connettersi subito con l'IP precompilato
+
+    def _build_ui(self, default_ip: str) -> None:
         central = QWidget()
         layout = QGridLayout(central)
+
+        connection_row = QWidget()
+        connection_layout = QHBoxLayout(connection_row)
+        connection_layout.setContentsMargins(0, 0, 0, 0)
+        self._ip_input = QLineEdit(default_ip)
+        self._connect_button = QPushButton("Connetti")
+        self._connect_button.clicked.connect(self._on_connect_clicked)
+        connection_layout.addWidget(QLabel("IP PLC:"))
+        connection_layout.addWidget(self._ip_input)
+        connection_layout.addWidget(self._connect_button)
 
         # TODO: sostituire con un layout HMI vero (indicatori, non solo testo)
         self._label_status = QLabel("In attesa di connessione...")
@@ -78,13 +129,68 @@ class MainWindow(QMainWindow):
         self._label_mode = QLabel("Modalità: -")
         self._label_mission = QLabel("Mission: -")
 
-        layout.addWidget(self._label_status, 0, 0)
-        layout.addWidget(self._label_position, 1, 0)
-        layout.addWidget(self._label_step, 2, 0)
-        layout.addWidget(self._label_mode, 3, 0)
-        layout.addWidget(self._label_mission, 4, 0)
+        layout.addWidget(connection_row, 0, 0)
+        layout.addWidget(self._label_status, 1, 0)
+        layout.addWidget(self._label_position, 2, 0)
+        layout.addWidget(self._label_step, 3, 0)
+        layout.addWidget(self._label_mode, 4, 0)
+        layout.addWidget(self._label_mission, 5, 0)
 
         self.setCentralWidget(central)
+
+    def _on_connect_clicked(self) -> None:
+        self._fast_timer.stop()
+        self._slow_timer.stop()
+
+        if self._plc_client is not None:
+            self._plc_client.disconnect()
+
+        # Riconnettersi (stesso PLC o un altro) mentre una missione è ancora
+        # aperta interromperebbe la sua continuità: la chiudiamo come
+        # 'interrupted' invece di rischiare di riaprirla con lo stesso
+        # mission_id (violazione della PRIMARY KEY in missions).
+        if (
+            self._open_mission_id is not None
+            and not self._mission_interrupted_handled
+            and self._last_snapshot is not None
+        ):
+            now = datetime.now(timezone.utc).isoformat()
+            self._database.end_mission(self._open_mission_id, self._last_snapshot, now, interrupted=True)
+
+        self._last_snapshot = None
+        self._open_mission_id = None
+        self._mission_interrupted_handled = False
+
+        ip = self._ip_input.text().strip()
+        if not ip:
+            self._label_status.setText("Inserisci un IP valido")
+            return
+
+        self._plc_client = PLCClient(
+            ip=ip,
+            rack=self._plc_rack,
+            slot=self._plc_slot,
+            db_number=self._plc_db_number,
+            db_size=self._plc_db_size,
+        )
+        self._label_status.setText(f"Connessione a {ip}...")
+        try:
+            self._plc_client.connect()
+        except PLCConnectionError as exc:
+            logger.error("Connessione al PLC fallita: %s", exc)
+            self._label_status.setText(f"Connessione fallita: {exc}")
+            return
+
+        _save_last_ip(self._last_ip_file, ip)
+        self._label_status.setText("PLC online")
+        self._fast_timer.start(self._fast_poll_interval_ms)
+        self._slow_timer.start(self._slow_poll_interval_ms)
+
+    def shutdown(self) -> None:
+        self._fast_timer.stop()
+        self._slow_timer.stop()
+        if self._plc_client is not None:
+            self._plc_client.disconnect()
 
     def _on_fast_poll(self) -> None:
         try:

@@ -1,56 +1,45 @@
 """
 Entry point dell'applicazione.
 
-Connette al PLC, apre lo storage SQLite e avvia l'HMI (che gestisce
-internamente i due loop di polling veloce/lento, vedi hmi/main_window.py).
+Apre lo storage SQLite e avvia l'HMI, che gestisce internamente la
+connessione al PLC (IP impostabile/riconnettibile dall'app — vedi il campo
+IP + pulsante Connetti in hmi/main_window.py) e i due loop di polling
+veloce/lento.
 """
 
 import logging
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 import config
 from hmi.main_window import MainWindow
-from plc_comm.s7_client import PLCClient, PLCConnectionError
 from storage.database import Database
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    plc_client = PLCClient(
-        ip=config.PLC_IP,
-        rack=config.PLC_RACK,
-        slot=config.PLC_SLOT,
-        db_number=config.PLC_DB_NUMBER,
-        db_size=config.PLC_DB_SIZE,
-    )
-
-    try:
-        plc_client.connect()
-    except PLCConnectionError as exc:
-        # TODO: decidere come gestire l'avvio senza PLC raggiungibile —
-        # per ora blocca, in futuro potrebbe avviare comunque l'UI e
-        # ritentare la connessione in background.
-        logger.error("Connessione al PLC fallita: %s", exc)
-        sys.exit(1)
-
     database = Database(config.SQLITE_DB_PATH)
 
     app = QApplication(sys.argv)
     window = MainWindow(
-        plc_client,
         database,
+        default_plc_ip=config.PLC_IP,
+        plc_rack=config.PLC_RACK,
+        plc_slot=config.PLC_SLOT,
+        plc_db_number=config.PLC_DB_NUMBER,
+        plc_db_size=config.PLC_DB_SIZE,
         fast_poll_interval_s=config.FAST_POLL_INTERVAL_S,
         slow_poll_interval_s=config.SLOW_POLL_INTERVAL_S,
         heartbeat_stale_threshold=config.HEARTBEAT_STALE_THRESHOLD,
+        last_ip_file=Path(config.SQLITE_DB_PATH).parent / "last_plc_ip.txt",
     )
     window.show()
 
     exit_code = app.exec()
-    plc_client.disconnect()
+    window.shutdown()
     database.close()
     sys.exit(exit_code)
 

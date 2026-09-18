@@ -7,6 +7,7 @@ DB export. Gestisce anche il rilevamento "PLC offline" tramite CycleCounter
 import logging
 
 import snap7
+from snap7.error import S7Error
 
 from . import db_mapping
 from .db_mapping import CraneSnapshot
@@ -35,10 +36,13 @@ class PLCClient:
         # TODO: gestire retry/backoff se la connessione fallisce al primo colpo
         try:
             self._client.connect(self._ip, self._rack, self._slot)
-        except RuntimeError as exc:
-            # snap7 solleva RuntimeError sia per libreria nativa Snap7
-            # mancante/non trovata sia per errori TCP (host irraggiungibile,
-            # rack/slot sbagliati, ecc.) — il messaggio originale distingue i casi.
+        except (S7Error, RuntimeError) as exc:
+            # python-snap7 >= 2.x è una reimplementazione pura Python (nessuna
+            # libreria nativa richiesta) e solleva S7Error/sottoclassi per
+            # host irraggiungibile, rack/slot sbagliati, ecc. Versioni più
+            # vecchie basate su libreria nativa sollevavano RuntimeError per
+            # gli stessi casi (compresa la libreria .dll/.so mancante) — li
+            # catturiamo entrambi per non dipendere dalla versione installata.
             raise PLCConnectionError(
                 f"Connessione al PLC {self._ip} fallita: {exc}"
             ) from exc
@@ -64,7 +68,7 @@ class PLCClient:
         """
         try:
             buffer = self._client.db_read(self._db_number, 0, self._db_size)
-        except RuntimeError as exc:
+        except (S7Error, RuntimeError) as exc:
             raise PLCConnectionError(f"Lettura del DB {self._db_number} fallita: {exc}") from exc
         snapshot = db_mapping.parse_snapshot(buffer)
         self._update_heartbeat(snapshot.cycle_counter)

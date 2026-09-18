@@ -1,10 +1,8 @@
 """
 Entry point dell'applicazione.
 
-Wiring minimale: connette al PLC e avvia l'HMI con un unico timer di
-polling (usa FAST_POLL_INTERVAL_S per ora). La separazione in loop
-veloce/lento e il collegamento allo storage sono i prossimi passi
-(vedi CLAUDE.md).
+Connette al PLC, apre lo storage SQLite e avvia l'HMI (che gestisce
+internamente i due loop di polling veloce/lento, vedi hmi/main_window.py).
 """
 
 import logging
@@ -15,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 import config
 from hmi.main_window import MainWindow
 from plc_comm.s7_client import PLCClient, PLCConnectionError
+from storage.database import Database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -38,12 +37,21 @@ def main() -> None:
         logger.error("Connessione al PLC fallita: %s", exc)
         sys.exit(1)
 
+    database = Database(config.SQLITE_DB_PATH)
+
     app = QApplication(sys.argv)
-    window = MainWindow(plc_client, poll_interval_s=config.FAST_POLL_INTERVAL_S)
+    window = MainWindow(
+        plc_client,
+        database,
+        fast_poll_interval_s=config.FAST_POLL_INTERVAL_S,
+        slow_poll_interval_s=config.SLOW_POLL_INTERVAL_S,
+        heartbeat_stale_threshold=config.HEARTBEAT_STALE_THRESHOLD,
+    )
     window.show()
 
     exit_code = app.exec()
     plc_client.disconnect()
+    database.close()
     sys.exit(exit_code)
 
 

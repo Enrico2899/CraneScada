@@ -16,17 +16,17 @@ venv\Scripts\activate          # Windows
 pip install -r requirements.txt
 ```
 
-`python-snap7` richiede anche la libreria nativa Snap7 (`.dll`/`.so`) installata
-sul sistema — su Windows di solito basta il pacchetto pip, ma se `connect()`
-fallisce con errori di libreria mancante, verificare l'installazione della
-libreria nativa separatamente.
+Le versioni recenti di `python-snap7` (>= 2.x) sono una reimplementazione pura
+Python: non serve installare nessuna libreria nativa `.dll`/`.so` separata.
 
 ## Configurazione
 
-Modificare `config.py` con:
-- IP, rack, slot del PLC
-- Numero del DB (`Q3_DB` = DB7901)
-- Intervalli di polling (loop veloce / loop lento)
+- **IP del PLC**: impostabile direttamente dall'app (campo IP + pulsante
+  "Connetti" nella finestra principale). L'ultimo IP usato con successo viene
+  ricordato tra un avvio e l'altro (`data/last_plc_ip.txt`, non versionato).
+  `config.py` fornisce solo il valore di default alla prima apertura.
+- Rack, slot, numero del DB (`Q3_DB` = DB7901), intervalli di polling: in
+  `config.py`.
 
 ## Avvio
 
@@ -34,8 +34,19 @@ Modificare `config.py` con:
 python main.py
 ```
 
+## Creare un eseguibile Windows (.exe)
+
+```
+build_exe.bat
+```
+
+Crea `dist\CraneScada.exe` con PyInstaller (va lanciato sul PC Windows con il
+venv del progetto già creato — non è possibile compilare un `.exe` Windows da
+un altro sistema operativo). Di default include la console (utile per vedere
+i log); `build_exe.bat --windowed` la nasconde.
+
 ## Stato del progetto
 
-Scheletro iniziale — struttura e firme pronte, logica da completare in
-Claude Code, file per file, partendo da `plc_comm/s7_client.py` (test di
-connessione al PLC reale).
+Scheletro iniziale iterato con Claude Code: connessione PLC, storage SQLite,
+polling veloce/lento e grafico live di posizione funzionanti. Vedi
+`CLAUDE.md` per architettura e decisioni prese.

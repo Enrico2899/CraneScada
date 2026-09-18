@@ -19,9 +19,12 @@ locale e riproposto al prossimo avvio.
 """
 
 import logging
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pyqtgraph as pg
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QGridLayout,
@@ -48,6 +51,9 @@ _DISCRETE_EVENT_FIELDS = [
     "pickup_active",
     "deposit_active",
 ]
+
+# Quanti campioni tenere nel grafico live (a FAST_POLL_INTERVAL_S=0.1s, 300 ~= 30s)
+_PLOT_MAX_POINTS = 300
 
 
 def _mission_id_or_none(mission_id: int) -> int | None:
@@ -99,6 +105,12 @@ class MainWindow(QMainWindow):
         self._open_mission_id: int | None = None
         self._mission_interrupted_handled = False
 
+        self._plot_start_time = time.monotonic()
+        self._plot_times: deque[float] = deque(maxlen=_PLOT_MAX_POINTS)
+        self._plot_pos_x: deque[float] = deque(maxlen=_PLOT_MAX_POINTS)
+        self._plot_pos_y: deque[float] = deque(maxlen=_PLOT_MAX_POINTS)
+        self._plot_pos_z: deque[float] = deque(maxlen=_PLOT_MAX_POINTS)
+
         self._build_ui(_load_last_ip(last_ip_file, default_plc_ip))
 
         self._fast_timer = QTimer(self)
@@ -122,12 +134,22 @@ class MainWindow(QMainWindow):
         connection_layout.addWidget(self._ip_input)
         connection_layout.addWidget(self._connect_button)
 
-        # TODO: sostituire con un layout HMI vero (indicatori, non solo testo)
+        # TODO: sostituire le label con indicatori HMI veri (LED colorati, ecc.)
         self._label_status = QLabel("In attesa di connessione...")
         self._label_position = QLabel("Pos: -, -, -")
         self._label_step = QLabel("Step: -")
         self._label_mode = QLabel("Modalità: -")
         self._label_mission = QLabel("Mission: -")
+
+        self._position_plot = pg.PlotWidget(title="Posizione gru nel tempo")
+        self._position_plot.setLabel("bottom", "Tempo", units="s")
+        self._position_plot.setLabel("left", "Posizione")
+        self._position_plot.addLegend()
+        self._position_plot.showGrid(x=True, y=True, alpha=0.3)
+        self._position_plot.setMinimumHeight(300)
+        self._curve_pos_x = self._position_plot.plot(pen="r", name="X")
+        self._curve_pos_y = self._position_plot.plot(pen="g", name="Y")
+        self._curve_pos_z = self._position_plot.plot(pen="b", name="Z")
 
         layout.addWidget(connection_row, 0, 0)
         layout.addWidget(self._label_status, 1, 0)
@@ -135,6 +157,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._label_step, 3, 0)
         layout.addWidget(self._label_mode, 4, 0)
         layout.addWidget(self._label_mission, 5, 0)
+        layout.addWidget(self._position_plot, 6, 0)
 
         self.setCentralWidget(central)
 
@@ -160,6 +183,15 @@ class MainWindow(QMainWindow):
         self._last_snapshot = None
         self._open_mission_id = None
         self._mission_interrupted_handled = False
+
+        self._plot_start_time = time.monotonic()
+        self._plot_times.clear()
+        self._plot_pos_x.clear()
+        self._plot_pos_y.clear()
+        self._plot_pos_z.clear()
+        self._curve_pos_x.setData([], [])
+        self._curve_pos_y.setData([], [])
+        self._curve_pos_z.setData([], [])
 
         ip = self._ip_input.text().strip()
         if not ip:
@@ -206,6 +238,7 @@ class MainWindow(QMainWindow):
         self._label_position.setText(
             f"Pos: {snapshot.pos_x:.1f}, {snapshot.pos_y:.1f}, {snapshot.pos_z:.1f}"
         )
+        self._update_position_plot(snapshot)
 
         self._handle_mission_transition(snapshot, now)
         self._database.insert_sample(_mission_id_or_none(snapshot.mission_id), snapshot, now)
@@ -214,6 +247,18 @@ class MainWindow(QMainWindow):
             self._handle_heartbeat_stale(snapshot, now)
 
         self._last_snapshot = snapshot
+
+    def _update_position_plot(self, snapshot: CraneSnapshot) -> None:
+        elapsed_s = time.monotonic() - self._plot_start_time
+        self._plot_times.append(elapsed_s)
+        self._plot_pos_x.append(snapshot.pos_x)
+        self._plot_pos_y.append(snapshot.pos_y)
+        self._plot_pos_z.append(snapshot.pos_z)
+
+        times = list(self._plot_times)
+        self._curve_pos_x.setData(times, list(self._plot_pos_x))
+        self._curve_pos_y.setData(times, list(self._plot_pos_y))
+        self._curve_pos_z.setData(times, list(self._plot_pos_z))
 
     def _on_slow_poll(self) -> None:
         """Rinfresca solo le label di stato dall'ultimo snapshot già letto dal loop veloce."""

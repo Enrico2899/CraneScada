@@ -3,8 +3,3 @@ __pycache__/
 *.pyc
 data/*.sqlite
 data/last_plc_ip.txt
-
-# Artefatti di build PyInstaller (vedi build_exe.bat)
-build/
-dist/
-*.spec

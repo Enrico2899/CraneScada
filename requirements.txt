@@ -1,11 +1,9 @@
 # Comunicazione col PLC Siemens (protocollo S7)
 python-snap7>=1.3
 
-# Interfaccia grafica HMI/SCADA
-PySide6>=6.6
-
-# Grafici real-time performanti (molto più veloci di matplotlib per dati live)
-pyqtgraph>=0.13
+# Backend web (serve la pagina HMI/SCADA e trasmette i dati via websocket)
+fastapi>=0.110
+uvicorn[standard]>=0.27
 
 # Analisi dati storicizzati (fase futura: confronto traiettorie, ecc.)
 pandas>=2.2

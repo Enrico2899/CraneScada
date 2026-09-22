@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crane HMI/SCADA Logger</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Crane HMI/SCADA Logger</h1>
+    <div class="connection-row">
+      <label for="ip-input">IP PLC</label>
+      <input id="ip-input" type="text" placeholder="192.168.0.1" autocomplete="off">
+      <button id="connect-btn">Connetti</button>
+      <span id="status-pill" class="status-pill status-neutral">
+        <span class="status-dot"></span>
+        <span id="status-text">In attesa di connessione...</span>
+      </span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="picker">
+      <h2>Variabili da monitorare</h2>
+      <div id="field-groups"></div>
+    </aside>
+
+    <section class="content">
+      <div id="tiles" class="tiles"></div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <h2>Grafico live</h2>
+          <span class="chart-hint">ultimi 30s — passa il mouse per i valori esatti</span>
+        </div>
+        <canvas id="chart" width="900" height="360"></canvas>
+        <div id="chart-legend" class="chart-legend"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

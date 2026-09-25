@@ -3,5 +3,3 @@ __pycache__/
 *.pyc
 data/*.sqlite
 data/last_plc_ip.txt
-.pytest_cache/
-lidar_anticollisione/*.log

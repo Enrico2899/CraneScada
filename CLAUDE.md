@@ -36,6 +36,10 @@ analysis/      → (futuro) script/notebook per confronto traiettorie
 config.py      → parametri di connessione PLC, path DB, intervalli polling
 ```
 
+Nota: `lidar_anticollisione/` è un progetto **separato e indipendente** da
+CraneScada (anticollisione tra carroponti con LiDAR Ouster OS0 Zone Monitor →
+DB PLC), ospitato qui solo temporaneamente — vedi il suo `README.md`.
+
 ## Decisioni prese finora (importante rispettarle)
 - **Loop di polling**: un solo vero read fisico del PLC per ciclo (il DB si
   legge per intero in un colpo solo con snap7, non esiste ancora una lettura

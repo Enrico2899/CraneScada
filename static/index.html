@@ -31,6 +31,18 @@
 
       <div class="chart-card">
         <div class="chart-header">
+          <h2>Sinottico posizione</h2>
+          <div class="synoptic-settings">
+            <label>Campata X (m) <input id="synoptic-xmax" type="number" min="1" step="1"></label>
+            <label>Campata Y (m) <input id="synoptic-ymax" type="number" min="1" step="1"></label>
+          </div>
+        </div>
+        <canvas id="synoptic" width="900" height="260"></canvas>
+        <div id="synoptic-legend" class="chart-legend"></div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
           <h2>Grafico live</h2>
           <span class="chart-hint">ultimi 30s — passa il mouse per i valori esatti</span>
         </div>

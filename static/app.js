@@ -85,7 +85,10 @@ const ALL_FIELDS = FIELD_GROUPS.flatMap((g) => g.fields);
 const FIELDS_BY_KEY = Object.fromEntries(ALL_FIELDS.map((f) => [f.key, f]));
 
 const STORAGE_KEY = "cranescada_selected_fields_v1";
+const SYNOPTIC_STORAGE_KEY = "cranescada_synoptic_bounds_v1";
 const CHART_WINDOW_S = 30;
+const TRAIL_WINDOW_S = 60;
+const TRAIL_MAX_POINTS = 600;
 
 const state = {
   checked: new Set(),
@@ -94,6 +97,11 @@ const state = {
   ws: null,
   redrawScheduled: false,
   hover: null, // {x: canvasX} while mouse is over the chart
+
+  synopticBounds: { xMax: 100, yMax: 20 },
+  trail: [], // [{t, x, y}, ...] posizione della gru nel tempo, per il sinottico
+  lastTargets: { pickup: null, deposit: null }, // {x, y} oppure null
+  synopticHover: null, // {x: canvasX, y: canvasY} mentre il mouse è sul sinottico
 };
 
 function loadCheckedFields() {
@@ -116,6 +124,24 @@ function saveCheckedFields() {
 
 function seriesColor(slot) {
   return getComputedStyle(document.documentElement).getPropertyValue(`--series-${slot}`).trim();
+}
+
+function loadSynopticBounds() {
+  try {
+    const raw = localStorage.getItem(SYNOPTIC_STORAGE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    /* ignore, usa i default */
+  }
+  return { xMax: 100, yMax: 20 };
+}
+
+function saveSynopticBounds() {
+  try {
+    localStorage.setItem(SYNOPTIC_STORAGE_KEY, JSON.stringify(state.synopticBounds));
+  } catch (e) {
+    /* privato/quota piena: va bene, e' solo una comodita' */
+  }
 }
 
 // ---------- Pannello selezione variabili ----------
@@ -277,6 +303,7 @@ function scheduleRedraw() {
   requestAnimationFrame(() => {
     state.redrawScheduled = false;
     drawChart();
+    drawSynoptic();
   });
 }
 
@@ -469,6 +496,216 @@ function setupChartHover() {
   window.addEventListener("resize", scheduleRedraw);
 }
 
+// ---------- Sinottico 2D ----------
+
+function setupSynopticInputs() {
+  const xInput = document.getElementById("synoptic-xmax");
+  const yInput = document.getElementById("synoptic-ymax");
+  xInput.value = state.synopticBounds.xMax;
+  yInput.value = state.synopticBounds.yMax;
+
+  const onChange = () => {
+    const xMax = Number(xInput.value);
+    const yMax = Number(yInput.value);
+    if (xMax > 0) state.synopticBounds.xMax = xMax;
+    if (yMax > 0) state.synopticBounds.yMax = yMax;
+    saveSynopticBounds();
+    scheduleRedraw();
+  };
+  xInput.addEventListener("change", onChange);
+  yInput.addEventListener("change", onChange);
+
+  const canvas = document.getElementById("synoptic");
+  canvas.addEventListener("mousemove", (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    state.synopticHover = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+    scheduleRedraw();
+  });
+  canvas.addEventListener("mouseleave", () => {
+    state.synopticHover = null;
+    scheduleRedraw();
+  });
+}
+
+function buildSynopticLegend() {
+  const legend = document.getElementById("synoptic-legend");
+  legend.innerHTML = "";
+  const ink = getComputedStyle(document.documentElement).getPropertyValue("--text-primary").trim();
+  const items = [
+    { color: ink, label: "Gru (posizione attuale)" },
+    { color: seriesColor(5), label: "Target pickup" },
+    { color: seriesColor(7), label: "Target deposit" },
+  ];
+  for (const item of items) {
+    const el = document.createElement("span");
+    el.className = "legend-item";
+    const swatch = document.createElement("span");
+    swatch.className = "legend-swatch";
+    swatch.style.background = item.color;
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    el.appendChild(swatch);
+    el.appendChild(label);
+    legend.appendChild(el);
+  }
+}
+
+function updateSynoptic(snapshot) {
+  const t = (performance.now() - state.chartStart) / 1000;
+  state.trail.push({ t, x: snapshot.pos_x, y: snapshot.pos_y });
+  const cutoff = t - TRAIL_WINDOW_S;
+  while (state.trail.length > 1 && state.trail[0].t < cutoff) state.trail.shift();
+  if (state.trail.length > TRAIL_MAX_POINTS) state.trail.shift();
+
+  if (snapshot.target_pickup_x !== undefined) {
+    state.lastTargets.pickup = { x: snapshot.target_pickup_x, y: snapshot.target_pickup_y };
+  }
+  if (snapshot.target_deposit_x !== undefined) {
+    state.lastTargets.deposit = { x: snapshot.target_deposit_x, y: snapshot.target_deposit_y };
+  }
+}
+
+function drawSynopticMarker(ctx, point, xToPx, yToPx, color, letter, surfaceColor) {
+  if (!point) return;
+  const px = xToPx(point.x);
+  const py = yToPx(point.y);
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.rect(px - 6, py - 6, 12, 12);
+  ctx.fill();
+  ctx.fillStyle = surfaceColor;
+  ctx.font = "bold 10px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(letter, px, py + 1);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+}
+
+function drawSynoptic() {
+  const canvas = document.getElementById("synoptic");
+  const ctx = canvas.getContext("2d");
+  const cssWidth = canvas.clientWidth || 900;
+  const cssHeight = canvas.clientHeight || 260;
+  const dpr = window.devicePixelRatio || 1;
+  if (canvas.width !== cssWidth * dpr || canvas.height !== cssHeight * dpr) {
+    canvas.width = cssWidth * dpr;
+    canvas.height = cssHeight * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssWidth, cssHeight);
+
+  const style = getComputedStyle(document.documentElement);
+  const gridColor = style.getPropertyValue("--gridline").trim();
+  const baselineColor = style.getPropertyValue("--baseline").trim();
+  const mutedColor = style.getPropertyValue("--text-muted").trim();
+  const inkColor = style.getPropertyValue("--text-primary").trim();
+  const surfaceColor = style.getPropertyValue("--surface-1").trim();
+
+  const margin = { top: 10, right: 14, bottom: 26, left: 54 };
+  const plotW = Math.max(1, cssWidth - margin.left - margin.right);
+  const plotH = Math.max(1, cssHeight - margin.top - margin.bottom);
+
+  const { xMax, yMax } = state.synopticBounds;
+  // X = campata lunga (orizzontale), Y = campata corta (verticale, 0 in basso)
+  const xToPx = (x) => margin.left + (x / xMax) * plotW;
+  const yToPx = (y) => margin.top + plotH - (y / yMax) * plotH;
+
+  // Griglia + etichette
+  ctx.strokeStyle = gridColor;
+  ctx.fillStyle = mutedColor;
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.lineWidth = 1;
+  const xTicks = 5;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let i = 0; i <= xTicks; i++) {
+    const x = (xMax * i) / xTicks;
+    const px = xToPx(x);
+    ctx.beginPath();
+    ctx.moveTo(px, margin.top);
+    ctx.lineTo(px, margin.top + plotH);
+    ctx.stroke();
+    ctx.fillText(`${x.toFixed(0)}m`, px, margin.top + plotH + 5);
+  }
+  const yTicks = 3;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i <= yTicks; i++) {
+    const y = (yMax * i) / yTicks;
+    const py = yToPx(y);
+    ctx.beginPath();
+    ctx.moveTo(margin.left, py);
+    ctx.lineTo(margin.left + plotW, py);
+    ctx.stroke();
+    ctx.fillText(`${y.toFixed(0)}m`, margin.left - 6, py);
+  }
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
+  // Bordo dell'area di lavoro
+  ctx.strokeStyle = baselineColor;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(margin.left, margin.top, plotW, plotH);
+
+  // Target pickup/deposit
+  drawSynopticMarker(ctx, state.lastTargets.pickup, xToPx, yToPx, seriesColor(5), "P", surfaceColor);
+  drawSynopticMarker(ctx, state.lastTargets.deposit, xToPx, yToPx, seriesColor(7), "D", surfaceColor);
+
+  // Scia della posizione recente
+  if (state.trail.length > 1) {
+    ctx.strokeStyle = inkColor;
+    ctx.globalAlpha = 0.25;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    state.trail.forEach((p, i) => {
+      const px = xToPx(p.x);
+      const py = yToPx(p.y);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Posizione attuale della gru
+  if (state.trail.length > 0) {
+    const last = state.trail[state.trail.length - 1];
+    const px = xToPx(last.x);
+    const py = yToPx(last.y);
+    ctx.fillStyle = inkColor;
+    ctx.beginPath();
+    ctx.arc(px, py, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = surfaceColor;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = mutedColor;
+    ctx.font = "13px system-ui, sans-serif";
+    ctx.fillText("In attesa di dati di posizione...", margin.left + 8, margin.top + plotH / 2);
+  }
+
+  // Hover: punto più vicino nella scia
+  if (state.synopticHover && state.trail.length > 0) {
+    let best = null;
+    let bestDist = Infinity;
+    for (const p of state.trail) {
+      const px = xToPx(p.x);
+      const py = yToPx(p.y);
+      const d = Math.hypot(px - state.synopticHover.x, py - state.synopticHover.y);
+      if (d < bestDist) { bestDist = d; best = { p, px, py }; }
+    }
+    if (best && bestDist < 40) {
+      const ageS = (performance.now() - state.chartStart) / 1000 - best.p.t;
+      const lines = [{ color: inkColor, text: `-${ageS.toFixed(1)}s: (${best.p.x.toFixed(1)}, ${best.p.y.toFixed(1)})` }];
+      drawTooltip(ctx, best.px, best.py - 10, lines, cssWidth);
+    }
+  }
+}
+
 // ---------- Stato connessione ----------
 
 function applyStatus(connected, alive, message) {
@@ -496,16 +733,19 @@ function connectWebSocket() {
     if (msg.type === "status") {
       applyStatus(msg.connected, null, msg.message);
       if (msg.connected) {
-        // Nuova connessione: azzeriamo il grafico per non mostrare un
-        // salto temporale rispetto alla sessione precedente.
+        // Nuova connessione: azzeriamo grafico e sinottico per non mostrare
+        // un salto temporale/spaziale rispetto alla sessione precedente.
         state.chartStart = performance.now();
         for (const key of state.buffers.keys()) state.buffers.set(key, []);
+        state.trail = [];
+        state.lastTargets = { pickup: null, deposit: null };
         scheduleRedraw();
       }
     } else if (msg.type === "snapshot") {
       applyStatus(msg.connected, msg.alive, msg.message);
       updateTiles(msg.snapshot);
       pushChartPoint(msg.snapshot);
+      updateSynoptic(msg.snapshot);
       scheduleRedraw();
     }
   };
@@ -520,6 +760,7 @@ function connectWebSocket() {
 
 async function init() {
   state.checked = loadCheckedFields();
+  state.synopticBounds = loadSynopticBounds();
   for (const field of ALL_FIELDS) {
     if (field.chartSlot && state.checked.has(field.key)) state.buffers.set(field.key, []);
   }
@@ -528,6 +769,8 @@ async function init() {
   rebuildTiles();
   rebuildLegend();
   setupChartHover();
+  setupSynopticInputs();
+  buildSynopticLegend();
   scheduleRedraw();
 
   try {
